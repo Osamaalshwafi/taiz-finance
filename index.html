@@ -18,6 +18,7 @@
     
     <!-- SheetJS for Excel Export -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <style>
         body { font-family: 'Cairo', sans-serif; }
@@ -386,375 +387,1740 @@
     <div id="modal-add-branch" class="fixed inset-0 bg-slate-900/60 z-40 hidden flex items-center justify-center p-4"><div class="bg-white rounded-3xl w-full max-w-md overflow-hidden"><div class="bg-emerald-600 text-white p-5 flex justify-between"><h3>إضافة فرع</h3><button onclick="closeAddBranchModal()"><i class="fas fa-times"></i></button></div><div class="p-6 space-y-4"><input type="text" id="branch-form-name" required class="w-full p-2 text-xs border rounded-xl" placeholder="اسم الفرع"><input type="text" id="branch-form-district" required class="w-full p-2 text-xs border rounded-xl" placeholder="المديرية"><button onclick="handleAddBranchSubmit()" class="w-full bg-emerald-600 text-white py-2 rounded-xl text-xs">حفظ</button></div></div></div>
     <div id="modal-add-user" class="fixed inset-0 bg-slate-900/60 z-40 hidden flex items-center justify-center p-4"><div class="bg-white rounded-3xl w-full max-w-lg overflow-hidden"><div class="bg-indigo-900 text-white p-5 flex justify-between"><h3 id="user-modal-title">إضافة موظف</h3><button onclick="closeAddUserModal()"><i class="fas fa-times"></i></button></div><div class="p-6 space-y-3"><input type="hidden" id="user-form-id"><input type="text" id="user-form-name" class="w-full p-2 text-xs border rounded-xl" placeholder="الاسم"><input type="text" id="user-form-title" class="w-full p-2 text-xs border rounded-xl" placeholder="الوظيفة"><select id="user-form-branch" class="w-full p-2 text-xs border rounded-xl"></select><select id="user-form-role" class="w-full p-2 text-xs border rounded-xl"><option value="موظف فرع">موظف فرع</option><option value="مدير نظام">مدير نظام</option></select><input type="text" id="user-form-username" class="w-full p-2 text-xs border rounded-xl" placeholder="اسم المستخدم"><input type="password" id="user-form-password" class="w-full p-2 text-xs border rounded-xl" placeholder="كلمة المرور"><input type="text" id="user-form-phone" class="w-full p-2 text-xs border rounded-xl" placeholder="رقم الهاتف"><input type="text" id="user-form-whatsapp" class="w-full p-2 text-xs border rounded-xl" placeholder="واتساب"><button onclick="handleAddUserSubmit()" class="w-full bg-indigo-900 text-white py-2 rounded-xl text-xs">حفظ</button></div></div></div>
 
-    <!-- Firebase V11 SDKs -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    
+<!-- Firebase V11 SDKs -->
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import {
+        getFirestore,
+        collection,
+        doc,
+        setDoc,
+        deleteDoc,
+        getDocs,
+        onSnapshot,
+        serverTimestamp,
+        writeBatch
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import {
+        getStorage,
+        ref as storageRef,
+        uploadBytes,
+        getDownloadURL,
+        deleteObject
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
 
-        /* ==========================================
-           FIREBASE CONFIGURATION (FOR VERCEL HOSTING)
-           قم باستبدال القيم بالأسفل بقيم مشروعك في Firebase
-           ========================================== */
-        const userFirebaseConfig = {
-            apiKey: "AIzaSyDQ7HcZuKrZBaWgKJ6pSehhB533RgjImHM",
+    /* =============================
+       Firebase config
+       ============================= */
+    const userFirebaseConfig = {
+         apiKey: "AIzaSyDQ7HcZuKrZBaWgKJ6pSehhB533RgjImHM",
   authDomain: "taiz-finance.firebaseapp.com",
   projectId: "taiz-finance",
   storageBucket: "taiz-finance.firebasestorage.app",
   messagingSenderId: "471172205464",
   appId: "1:471172205464:web:2a77d240bca14385fa79ed"
+    };
+
+    const firebaseConfig = typeof __firebase_config !== 'undefined'
+        ? JSON.parse(__firebase_config)
+        : userFirebaseConfig;
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const storage = getStorage(app);
+
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'taiz-finance-v1';
+
+    const COL = {
+        branches: 'branches',
+        users: 'users',
+        documents: 'documents',
+        dynamicForms: 'dynamicForms',
+        fileFillers: 'fileFillers',
+        settings: 'settings'
+    };
+
+    const DOC_IDS = {
+        settings: 'global'
+    };
+
+    /* =============================
+       Global state
+       ============================= */
+    window.branches = [];
+    window.users = [];
+    window.documents = [];
+    window.dynamicForms = [];
+    window.fileFillers = [];
+    window.systemSettings = {
+        sysName: "نظام المراسلات المالي",
+        sysIcon: "fa-balance-scale",
+        settingsPasswordHash: "sha256:123456"
+    };
+
+    window.loggedUser = null;
+    window.activeTab = 'overview';
+    window.currentDocFilter = 'all';
+    window.currentDfFields = [];
+    window.currentFillerFields = [];
+    window.currentlyFillingFormId = null;
+    window.currentlyFillingInteractiveId = null;
+
+    let hasInitializedUI = false;
+    let snapshotReady = {
+        branches: false,
+        users: false,
+        documents: false,
+        dynamicForms: false,
+        fileFillers: false,
+        settings: false
+    };
+
+    /* =============================
+       Schema and migration
+       ============================= */
+    const schemas = {
+        branches: { id: "", name: "فرع غير مسمى", district: "" },
+        users: {
+            id: "",
+            name: "مجهول",
+            title: "موظف",
+            branchId: "",
+            role: "موظف فرع",
+            username: "",
+            passwordHash: "sha256:123456",
+            avatar: "",
+            phone: "",
+            whatsapp: ""
+        },
+        documents: {
+            id: "",
+            tab: "أخرى",
+            senderId: "",
+            receiverBranchId: "",
+            title: "بدون عنوان",
+            desc: "",
+            fileName: "",
+            fileType: "docx",
+            fileUrl: "",
+            storagePath: "",
+            fileSize: 0,
+            timestamp: new Date().toISOString(),
+            isRead: false
+        },
+        dynamicForms: {
+            id: "",
+            title: "نموذج",
+            creatorId: "",
+            targetBranchId: "",
+            fields: [],
+            isSubmitted: false,
+            submissionData: null,
+            timestamp: new Date().toISOString()
+        },
+        fileFillers: {
+            id: "",
+            title: "قالب",
+            creatorId: "",
+            targetBranchId: "",
+            originalFile: "",
+            originalFileUrl: "",
+            storagePath: "",
+            fields: [],
+            isFilled: false,
+            timestamp: new Date().toISOString()
+        },
+        settings: {
+            sysName: "نظام المراسلات المالي",
+            sysIcon: "fa-balance-scale",
+            settingsPasswordHash: "sha256:123456"
+        }
+    };
+
+    function validateAndMigrate(data, collectionName) {
+        const schema = schemas[collectionName];
+        if (!schema) return data;
+        return { ...schema, ...(data || {}) };
+    }
+
+    /* =============================
+       Utilities
+       ============================= */
+    const $ = (id) => document.getElementById(id);
+    const safeText = (v) => String(v ?? '');
+    const escapeHTML = (str) => safeText(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+
+    function uid(prefix) {
+        return `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    }
+
+    function sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function formatDate(isoStr) {
+        if (!isoStr) return '';
+        try {
+            return new Date(isoStr).toLocaleDateString('ar-YE', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+        } catch {
+            return isoStr;
+        }
+    }
+
+    function formatTime() {
+        const now = new Date();
+        return {
+            time: now.toLocaleTimeString('ar-YE', { hour: '2-digit', minute: '2-digit', hour12: true }),
+            date: now.toLocaleDateString('ar-YE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
         };
+    }
 
-        // Environment switch (Canvas vs User Vercel)
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : userFirebaseConfig;
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'taiz-finance-v1';
-
-        // Global State
-        window.branches = [];
-        window.users = [];
-        window.documents = [];
-        window.dynamicForms = [];
-        window.fileFillers = [];
-        window.systemSettings = { sysName: "نظام المراسلات المالي", sysIcon: "fa-balance-scale", settingsPasswordHash: "123456" };
-        
-        window.loggedUser = null;
-        window.activeTab = 'overview';
-        window.currentDocFilter = 'all';
-
-        /* ==========================================
-           DATA MIGRATION & SCHEMA VALIDATION (Null-Safety)
-           هذه الميزة تحمي النظام من الانهيار عند تحديث الميزات
-           ========================================== */
-        const schemas = {
-            branches: { id: "", name: "فرع غير مسمى", district: "" },
-            users: { id: "", name: "مجهول", title: "موظف", branchId: "", role: "موظف فرع", username: "", passwordHash: "123456", avatar: "", phone: "", whatsapp: "" },
-            documents: { id: "", tab: "أخرى", senderId: "", receiverBranchId: "", title: "بدون عنوان", desc: "", fileName: "", fileType: "docx", timestamp: new Date().toISOString(), isRead: false },
-            dynamicForms: { id: "", title: "نموذج", creatorId: "", targetBranchId: "", fields: [], isSubmitted: false, submissionData: null, timestamp: new Date().toISOString() },
-            fileFillers: { id: "", title: "قالب", creatorId: "", targetBranchId: "", originalFile: "", fields: [], isFilled: false, timestamp: new Date().toISOString() },
-            settings: { sysName: "نظام المراسلات المالي", sysIcon: "fa-balance-scale", settingsPasswordHash: "123456" }
+    function getFileIcon(fileNameOrType = '') {
+        const ext = String(fileNameOrType).toLowerCase().split('.').pop();
+        const map = {
+            pdf: 'fa-file-pdf',
+            doc: 'fa-file-word',
+            docx: 'fa-file-word',
+            xls: 'fa-file-excel',
+            xlsx: 'fa-file-excel',
+            png: 'fa-file-image',
+            jpg: 'fa-file-image',
+            jpeg: 'fa-file-image',
+            gif: 'fa-file-image',
+            txt: 'fa-file-lines',
+            zip: 'fa-file-zipper'
         };
+        return map[ext] || 'fa-file';
+    }
 
-        function validateAndMigrate(data, collectionName) {
-            const schema = schemas[collectionName];
-            if(!schema) return data;
-            // يتم دمج القيم الافتراضية مع البيانات القادمة من السيرفر
-            return { ...schema, ...data };
+    async function sha256(text) {
+        const buffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+        return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function hashPassword(password) {
+        return `sha256:${await sha256(password)}`;
+    }
+
+    async function verifyPassword(stored, input) {
+        if (!stored) return false;
+        if (stored.startsWith('sha256:')) {
+            const inputHash = await hashPassword(input);
+            return stored === inputHash;
+        }
+        return stored === input || stored === (await hashPassword(input));
+    }
+
+    function ensureElement(parent, tag, id, className, html) {
+        let el = $(id);
+        if (!el) {
+            el = document.createElement(tag);
+            el.id = id;
+            if (className) el.className = className;
+            if (html !== undefined) el.innerHTML = html;
+            parent.appendChild(el);
+        }
+        return el;
+    }
+
+    function ensureDynamicUI() {
+        const navDocuments = $('nav-documents');
+        if (navDocuments && !$('unread-docs-count')) {
+            const badge = document.createElement('span');
+            badge.id = 'unread-docs-count';
+            badge.className = 'bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full hidden';
+            badge.textContent = '0';
+            navDocuments.appendChild(badge);
         }
 
-        /* ==========================================
-           FIREBASE REALTIME SYNC (Firestore)
-           ========================================== */
-        async function initAuth() {
-            try {
-                await signInAnonymously(auth);
-            } catch (e) {
-                console.error("Auth error:", e);
-                showToast("خطأ في الاتصال بالسيرفر", "error");
+        const topHeader = $('current-page-title')?.closest('header');
+        if (topHeader && !$('bell-indicator')) {
+            const right = topHeader.querySelector('.flex.items-center.space-x-4.space-x-reverse');
+            if (right) {
+                const bellWrap = document.createElement('div');
+                bellWrap.className = 'relative cursor-pointer hover:bg-slate-100 p-2.5 rounded-full transition';
+                bellWrap.onclick = () => switchTab('documents');
+                bellWrap.innerHTML = '<i class="fas fa-bell text-slate-600 text-lg"></i><span id="bell-indicator" class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-rose-500 rounded-full hidden"></span>';
+                right.appendChild(bellWrap);
             }
         }
 
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                setupRealtimeListeners();
+        const settingsTab = $('tab-settings');
+        if (settingsTab && !$('backup-controls')) {
+            const box = document.createElement('div');
+            box.id = 'backup-controls';
+            box.className = 'bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4 max-w-3xl mx-auto mt-6';
+            box.innerHTML = `
+                <div>
+                    <h3 class="font-extrabold text-slate-800 text-lg">النسخ الاحتياطي والاسترجاع</h3>
+                    <p class="text-xs text-slate-400 mt-0.5">تصدير نسخة JSON من كل البيانات أو استيراد نسخة احتياطية محفوظة لديك.</p>
+                </div>
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <button onclick="exportBackup()" class="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex-1">تصدير نسخة احتياطية</button>
+                    <button onclick="triggerImportBackup()" class="py-2.5 px-4 bg-indigo-900 hover:bg-indigo-950 text-white font-bold rounded-xl text-xs flex-1">استيراد نسخة احتياطية</button>
+                    <input type="file" id="backup-file-input" accept=".json" class="hidden">
+                </div>
+            `;
+            settingsTab.appendChild(box);
+        }
+
+        if (!$('login-screen').querySelector('#demo-credentials-box')) {
+            const loginCard = $('login-screen')?.querySelector('.bg-white\\/95');
+            if (loginCard) {
+                const demo = document.createElement('div');
+                demo.id = 'demo-credentials-box';
+                demo.className = 'mt-8 pt-6 border-t border-slate-100 text-center';
+                demo.innerHTML = `
+                    <p class="text-xs text-slate-400">حسابات تجريبية للمعاينة:</p>
+                    <div class="flex flex-wrap gap-2 justify-center mt-2 text-xs">
+                        <span class="px-2 py-1 bg-slate-100 rounded text-slate-600">المركز الرئيسي: <strong class="text-slate-800">admin</strong> / <strong class="text-slate-800">123456</strong></span>
+                        <span class="px-2 py-1 bg-slate-100 rounded text-slate-600">فرع القاهرة: <strong class="text-slate-800">alqahera</strong> / <strong class="text-slate-800">123456</strong></span>
+                    </div>
+                `;
+                loginCard.appendChild(demo);
             }
+        }
+    }
+
+    function showToast(message, type = 'info') {
+        const toast = $('toast');
+        if (!toast) return;
+        const msg = $('toast-message');
+        const icon = $('toast-icon');
+        msg.textContent = message;
+        icon.className = 'fas text-lg ' + (
+            type === 'success'
+                ? 'fa-check-circle text-emerald-400'
+                : type === 'error'
+                    ? 'fa-exclamation-circle text-rose-500'
+                    : 'fa-info-circle text-amber-400'
+        );
+        toast.classList.remove('translate-y-20', 'opacity-0');
+        clearTimeout(window.__toastTimer);
+        window.__toastTimer = setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 4000);
+    }
+
+    function applySettingsToUI() {
+        const n = window.systemSettings?.sysName ?? 'نظام المراسلات';
+        const i = window.systemSettings?.sysIcon ?? 'fa-balance-scale';
+        document.title = n;
+        if ($('login-sys-name')) $('login-sys-name').textContent = n;
+        if ($('sidebar-sys-name')) $('sidebar-sys-name').textContent = n;
+        if ($('login-logo-icon')) $('login-logo-icon').className = `fas text-indigo-900 text-4xl ${i}`;
+        if ($('sidebar-logo-icon')) $('sidebar-logo-icon').className = `fas text-indigo-900 text-2xl ${i}`;
+        if ($('set-sys-name')) $('set-sys-name').value = n;
+        if ($('set-sys-icon')) $('set-sys-icon').value = i;
+    }
+
+    function populateBranchDropdowns() {
+        const selects = ['doc-form-target', 'df-target-branch', 'filler-target-branch', 'user-form-branch', 'download-branch-select'];
+        selects.forEach(id => {
+            const el = $(id);
+            if (!el) return;
+            const current = el.value;
+            el.innerHTML = '';
+            if (id === 'download-branch-select') {
+                const optAll = document.createElement('option');
+                optAll.value = 'all';
+                optAll.textContent = 'كل الفروع والإدارات';
+                el.appendChild(optAll);
+            }
+            window.branches.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.textContent = b.name;
+                el.appendChild(opt);
+            });
+            if (current) el.value = current;
+        });
+    }
+
+    function updateClock() {
+        const { time, date } = formatTime();
+        if ($('live-time')) $('live-time').textContent = time;
+        if ($('live-date')) $('live-date').textContent = date;
+    }
+
+    function getVisibleDocuments() {
+        const isAdmin = window.loggedUser?.role === 'مدير نظام';
+        let viewableDocs = [...window.documents];
+        if (!isAdmin) {
+            viewableDocs = viewableDocs.filter(d =>
+                d.receiverBranchId === window.loggedUser?.branchId ||
+                d.senderId === window.loggedUser?.id
+            );
+        }
+        if (window.currentDocFilter !== 'all') {
+            viewableDocs = viewableDocs.filter(d => d.tab === window.currentDocFilter);
+        }
+        viewableDocs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        return viewableDocs;
+    }
+
+    function getVisibleForms() {
+        const isAdmin = window.loggedUser?.role === 'مدير نظام';
+        const received = window.dynamicForms.filter(f => f.targetBranchId === window.loggedUser?.branchId || isAdmin);
+        const sent = window.dynamicForms.filter(f => f.creatorId === window.loggedUser?.id || isAdmin);
+        return { received, sent };
+    }
+
+    function getVisibleFillers() {
+        const isAdmin = window.loggedUser?.role === 'مدير نظام';
+        return window.fileFillers.filter(f => isAdmin || f.targetBranchId === window.loggedUser?.branchId || f.creatorId === window.loggedUser?.id);
+    }
+
+    function updateLiveStats() {
+        if (!window.loggedUser) return;
+        const isAdmin = window.loggedUser.role === 'مدير نظام';
+        const visibleDocs = getVisibleDocuments();
+        const unread = window.documents.filter(d => !d.isRead && (isAdmin || d.receiverBranchId === window.loggedUser.branchId || d.senderId === window.loggedUser.id));
+        const forms = getVisibleForms();
+        const sentUnread = forms.received.filter(f => !f.isSubmitted).length;
+
+        const incoming = visibleDocs.filter(d => d.receiverBranchId === window.loggedUser.branchId || (isAdmin && d.receiverBranchId)).length;
+        const outgoing = visibleDocs.filter(d => d.senderId === window.loggedUser.id).length;
+
+        if ($('stat-hero-incoming')) $('stat-hero-incoming').textContent = incoming;
+        if ($('stat-hero-outgoing')) $('stat-hero-outgoing').textContent = outgoing;
+        if ($('stat-total-docs')) $('stat-total-docs').textContent = visibleDocs.length;
+        if ($('stat-active-forms')) $('stat-active-forms').textContent = window.dynamicForms.filter(f => !f.isSubmitted).length;
+        if ($('stat-total-branches')) $('stat-total-branches').textContent = window.branches.length;
+        if ($('stat-total-users')) $('stat-total-users').textContent = window.users.length;
+        if ($('pending-forms-count')) {
+            $('pending-forms-count').textContent = String(sentUnread);
+            $('pending-forms-count').classList.toggle('hidden', sentUnread === 0);
+        }
+        if ($('badge-received-forms')) $('badge-received-forms').textContent = `${forms.received.length} نموذج`;
+        if ($('badge-sent-forms')) $('badge-sent-forms').textContent = `${forms.sent.length} مرسل`;
+        if ($('unread-docs-count')) {
+            $('unread-docs-count').textContent = String(unread.length);
+            $('unread-docs-count').classList.toggle('hidden', unread.length === 0);
+        }
+        if ($('bell-indicator')) $('bell-indicator').classList.toggle('hidden', unread.length === 0);
+        if ($('badge-branch-count')) $('badge-branch-count').textContent = `${window.branches.length} فرع`;
+        if ($('badge-user-count')) $('badge-user-count').textContent = `${window.users.length} حساب`;
+        if ($('user-role-badge')) $('user-role-badge').textContent = isAdmin ? 'مدير نظام' : 'موظف فرع';
+    }
+
+    function setActiveNav(tabName) {
+        ['overview', 'documents', 'dynamic-forms', 'file-filler', 'manage-branches', 'settings'].forEach(t => {
+            const navBtn = $(`nav-${t}`);
+            if (!navBtn) return;
+            navBtn.className = 'w-full flex items-center ' + (t === 'documents' || t === 'dynamic-forms' ? 'justify-between ' : '') + 'px-4 py-3 rounded-xl transition font-semibold text-sm hover:bg-slate-800 hover:text-white text-slate-400';
+        });
+        const active = $(`nav-${tabName}`);
+        if (active) active.className = 'w-full flex items-center ' + (tabName === 'documents' || tabName === 'dynamic-forms' ? 'justify-between ' : '') + 'px-4 py-3 rounded-xl transition font-semibold text-sm bg-indigo-900 text-white shadow-md';
+    }
+
+    function switchTab(tabName) {
+        if (tabName === 'settings' && window.loggedUser?.role !== 'مدير نظام') {
+            showToast('صلاحيات غير كافية', 'error');
+            return;
+        }
+        window.activeTab = tabName;
+        ['overview', 'documents', 'dynamic-forms', 'file-filler', 'manage-branches', 'settings'].forEach(t => {
+            $(`tab-${t}`)?.classList.add('hidden');
+        });
+        $(`tab-${tabName}`)?.classList.remove('hidden');
+        if ($('current-page-title')) {
+            const titles = {
+                overview: 'الرئيسية والإحصائيات',
+                documents: 'المراسلات والوثائق',
+                'dynamic-forms': 'النماذج اليومية',
+                'file-filler': 'تعبئة ملفات Word/Excel',
+                'manage-branches': 'إدارة الفروع والموظفين',
+                settings: 'إعدادات الهوية والأمان'
+            };
+            $('current-page-title').textContent = titles[tabName] || '';
+        }
+        setActiveNav(tabName);
+        renderCurrentTabData(tabName);
+    }
+
+    function renderCurrentTabData(tabName) {
+        updateLiveStats();
+        if (tabName === 'overview') renderOverviewActivities();
+        else if (tabName === 'documents') renderDocumentsList();
+        else if (tabName === 'dynamic-forms') renderDynamicForms();
+        else if (tabName === 'file-filler') renderFileFillers();
+        else if (tabName === 'manage-branches') renderBranchesAndUsers();
+    }
+
+    function renderOverviewActivities() {
+        const container = $('recent-activities-list');
+        if (!container || !window.loggedUser) return;
+        const items = [
+            ...window.documents.map(d => ({ type: 'doc', ts: d.timestamp, title: d.title, tab: d.tab, actor: d.senderId, id: d.id })),
+            ...window.dynamicForms.map(f => ({ type: 'form', ts: f.timestamp, title: f.title, tab: 'نموذج', actor: f.creatorId, id: f.id })),
+            ...window.fileFillers.map(f => ({ type: 'filler', ts: f.timestamp, title: f.title, tab: 'قالب', actor: f.creatorId, id: f.id }))
+        ].sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 6);
+
+        container.innerHTML = '';
+        if (items.length === 0) {
+            container.innerHTML = '<div class="text-center text-slate-400 text-xs py-6">لا توجد تحركات حديثة حتى الآن.</div>';
+            return;
+        }
+        items.forEach(item => {
+            const sender = window.users.find(u => u.id === item.actor)?.name || 'النظام';
+            const icon = item.type === 'doc' ? 'fa-folder-open' : item.type === 'form' ? 'fa-file-invoice' : 'fa-file-signature';
+            const bg = item.type === 'doc' ? '#eef2ff' : item.type === 'form' ? '#ecfdf5' : '#fffbeb';
+            const fg = item.type === 'doc' ? '#4f46e5' : item.type === 'form' ? '#059669' : '#d97706';
+            const html = `
+                <div class="p-3 rounded-2xl border border-slate-100 bg-slate-50/70 flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3 overflow-hidden">
+                        <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style="background:${bg};color:${fg}">
+                            <i class="fas ${icon}"></i>
+                        </div>
+                        <div class="overflow-hidden">
+                            <h5 class="text-xs font-bold text-slate-800 truncate">${escapeHTML(item.title)}</h5>
+                            <p class="text-[11px] text-slate-500 truncate">بواسطة: ${escapeHTML(sender)} · ${formatDate(item.ts)}</p>
+                        </div>
+                    </div>
+                    <span class="text-[10px] px-2 py-0.5 rounded-full font-bold" style="background:${bg};color:${fg}">${escapeHTML(item.tab)}</span>
+                </div>`;
+            container.insertAdjacentHTML('beforeend', html);
+        });
+    }
+
+    async function fileToStorage(file, folder) {
+        if (!file) return { fileUrl: '', storagePath: '', fileName: '', fileSize: 0 };
+        const storagePath = `${folder}/${uid('file')}_${file.name}`.replaceAll(' ', '_');
+        const ref = storageRef(storage, storagePath);
+        await uploadBytes(ref, file);
+        const fileUrl = await getDownloadURL(ref);
+        return {
+            fileUrl,
+            storagePath,
+            fileName: file.name,
+            fileSize: file.size
+        };
+    }
+
+    async function deleteStorageByPath(path) {
+        if (!path) return;
+        try {
+            await deleteObject(storageRef(storage, path));
+        } catch (e) {
+            console.warn('Storage delete failed:', e);
+        }
+    }
+
+    async function saveToFirestore(colName, docId, data) {
+        const ref = doc(db, colName, docId);
+        await setDoc(ref, data, { merge: true });
+    }
+
+    async function deleteFromFirestore(colName, docId) {
+        await deleteDoc(doc(db, colName, docId));
+    }
+
+    function markDocumentRead(docId) {
+        const item = window.documents.find(d => d.id === docId);
+        if (!item || item.isRead) return;
+        saveToFirestore('documents', docId, { ...item, isRead: true });
+    }
+
+    /* =============================
+       Login and session
+       ============================= */
+    function handleLogin(event) {
+        event.preventDefault();
+        const uInput = $('login-username').value.trim();
+        const pInput = $('login-password').value;
+
+        const matchedUser = window.users.find(u => String(u.username || '').toLowerCase() === uInput.toLowerCase());
+        if (!matchedUser) {
+            showToast('بيانات الدخول غير صحيحة', 'error');
+            return;
+        }
+
+        verifyPassword(matchedUser.passwordHash, pInput).then(ok => {
+            if (!ok) {
+                showToast('بيانات الدخول غير صحيحة', 'error');
+                return;
+            }
+            window.loggedUser = matchedUser;
+            showToast('تم تسجيل الدخول بنجاح.', 'success');
+            enterDashboard();
+        });
+    }
+
+    function enterDashboard() {
+        $('login-screen')?.classList.add('hidden');
+        $('dashboard-screen')?.classList.remove('hidden');
+
+        const safeName = window.loggedUser?.name ?? 'مجهول';
+        if ($('user-full-name')) $('user-full-name').textContent = safeName;
+        if ($('user-title')) $('user-title').textContent = window.loggedUser?.title ?? '';
+        if ($('hero-welcome-msg')) $('hero-welcome-msg').textContent = `أهلاً بك، ${safeName}`;
+        if ($('user-avatar')) $('user-avatar').src = window.loggedUser?.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150';
+
+        const isAdmin = window.loggedUser?.role === 'مدير نظام';
+        ['admin-menu-header', 'nav-settings', 'btn-create-form', 'admin-branches-actions'].forEach(id => {
+            const el = $(id);
+            if (el) el.classList.toggle('hidden', !isAdmin);
         });
 
-        function setupRealtimeListeners() {
-            const basePath = `artifacts/${appId}/public/data`;
+        populateBranchDropdowns();
+        switchTab('overview');
+    }
 
-            const collectionsToSync = [
-                { name: 'branches', stateKey: 'branches' },
-                { name: 'users', stateKey: 'users' },
-                { name: 'documents', stateKey: 'documents' },
-                { name: 'dynamicForms', stateKey: 'dynamicForms' },
-                { name: 'fileFillers', stateKey: 'fileFillers' }
-            ];
+    function handleLogout() {
+        window.loggedUser = null;
+        $('dashboard-screen')?.classList.add('hidden');
+        $('login-screen')?.classList.remove('hidden');
+        if ($('login-password')) $('login-password').value = '';
+        if ($('login-username')) $('login-username').value = '';
+    }
 
-            collectionsToSync.forEach(col => {
-                onSnapshot(collection(db, basePath, col.name), (snapshot) => {
-                    const data = [];
-                    snapshot.forEach(doc => data.push(validateAndMigrate(doc.data(), col.name)));
-                    window[col.stateKey] = data;
-                    if(window.loggedUser) renderCurrentTabData(window.activeTab);
-                    checkInitComplete();
-                }, (error) => console.error(`Error fetching ${col.name}:`, error));
-            });
+    /* =============================
+       Documents
+       ============================= */
+    function filterDocs(f) {
+        window.currentDocFilter = f;
+        renderDocumentsList();
+    }
 
-            // Settings is a single document
-            onSnapshot(doc(db, basePath, 'system', 'settings'), (docSnap) => {
-                if (docSnap.exists()) {
-                    window.systemSettings = validateAndMigrate(docSnap.data(), 'settings');
-                    applySettingsToUI();
-                }
-            }, (err) => console.error(err));
+    function renderDocumentsList() {
+        const container = $('documents-container');
+        if (!container || !window.loggedUser) return;
+        container.innerHTML = '';
+
+        const visibleDocs = getVisibleDocuments();
+        if (visibleDocs.length === 0) {
+            container.innerHTML = `
+                <div class="bg-white p-12 text-center rounded-2xl border border-slate-100 text-slate-400 shadow-sm">
+                    <i class="fas fa-folder-open text-5xl mb-3 text-slate-200"></i>
+                    <p class="text-sm font-bold">لا توجد وثائق متاحة للعرض في هذا التبويب.</p>
+                    <p class="text-xs text-slate-400 mt-1">تقتصر الصلاحيات على المستندات الصادرة والواردة لفرعك فقط.</p>
+                </div>`;
+            return;
         }
 
-        let isInitialized = false;
-        function checkInitComplete() {
-            // First time load hiding loader
-            if(!isInitialized && window.users.length > 0) {
-                isInitialized = true;
-                document.getElementById('loader').style.opacity = '0';
-                setTimeout(() => {
-                    document.getElementById('loader').classList.add('hidden');
-                    document.getElementById('login-screen').parentElement.classList.remove('hidden');
-                    updateClock();
-                    setInterval(updateClock, 1000);
-                }, 300);
-            }
-        }
-
-        // Firestore Write Helper
-        window.saveToFirestore = async (colName, docId, data) => {
-            try {
-                const basePath = `artifacts/${appId}/public/data`;
-                await setDoc(doc(db, basePath, colName, docId), data);
-            } catch (e) {
-                showToast("فشل الحفظ في السحابة", "error");
-            }
-        };
-
-        window.deleteFromFirestore = async (colName, docId) => {
-            try {
-                const basePath = `artifacts/${appId}/public/data`;
-                await deleteDoc(doc(db, basePath, colName, docId));
-            } catch (e) {
-                showToast("فشل الحذف من السحابة", "error");
-            }
-        };
-
-        // --- UI AND LOGIC FUNCTIONS (Exposed to window for HTML access) ---
-        window.showToast = function(message, type = "info") {
-            const toast = document.getElementById('toast');
-            const msg = document.getElementById('toast-message');
-            const icon = document.getElementById('toast-icon');
-            msg.textContent = message;
-            icon.className = `fas text-lg ${type === 'success' ? 'fa-check-circle text-emerald-400' : type === 'error' ? 'fa-exclamation-circle text-rose-500' : 'fa-info-circle text-amber-400'}`;
-            toast.classList.remove('translate-y-20', 'opacity-0');
-            setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 4000);
-        }
-
-        window.applySettingsToUI = function() {
-            const n = window.systemSettings?.sysName ?? "نظام المراسلات";
-            const i = window.systemSettings?.sysIcon ?? "fa-balance-scale";
-            document.getElementById('login-sys-name').textContent = n;
-            document.getElementById('sidebar-sys-name').textContent = n;
-            document.getElementById('login-logo-icon').className = "fas text-indigo-900 text-4xl " + i;
-            document.getElementById('sidebar-logo-icon').className = "fas text-indigo-900 text-2xl " + i;
-            if(document.getElementById('set-sys-name')) document.getElementById('set-sys-name').value = n;
-            if(document.getElementById('set-sys-icon')) document.getElementById('set-sys-icon').value = i;
-        }
-
-        window.handleLogin = function(event) {
-            event.preventDefault();
-            const uInput = document.getElementById('login-username').value.trim();
-            const pInput = document.getElementById('login-password').value;
-            const matchedUser = window.users.find(u => u?.username?.toLowerCase() === uInput.toLowerCase() && u?.passwordHash === pInput);
-
-            if (matchedUser) {
-                window.loggedUser = matchedUser;
-                showToast("تم تسجيل الدخول بنجاح.", "success");
-                enterDashboard();
-            } else {
-                showToast("بيانات الدخول غير صحيحة", "error");
-            }
-        }
-
-        window.enterDashboard = function() {
-            document.getElementById('login-screen').classList.add('hidden');
-            document.getElementById('dashboard-screen').classList.remove('hidden');
-
-            const safeName = window.loggedUser?.name ?? "مجهول";
-            document.getElementById('user-full-name').textContent = safeName;
-            document.getElementById('user-title').textContent = window.loggedUser?.title ?? "";
-            document.getElementById('hero-welcome-msg').textContent = `أهلاً بك، ${safeName}`;
-            document.getElementById('user-avatar').src = window.loggedUser?.avatar || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150";
-            document.getElementById('user-role-badge').textContent = window.loggedUser?.role === 'مدير نظام' ? 'مدير نظام' : 'موظف فرع';
-
-            const isAdmin = window.loggedUser?.role === 'مدير نظام';
-            ['admin-menu-header', 'nav-settings', 'btn-create-form', 'admin-branches-actions'].forEach(id => {
-                const el = document.getElementById(id);
-                if(el) isAdmin ? el.classList.remove('hidden') : el.classList.add('hidden');
-            });
-
-            populateBranchDropdowns();
-            switchTab('overview');
-        }
-
-        window.handleLogout = function() {
-            window.loggedUser = null;
-            document.getElementById('dashboard-screen').classList.add('hidden');
-            document.getElementById('login-screen').classList.remove('hidden');
-            document.getElementById('login-password').value = "";
-        }
-
-        window.switchTab = function(tabName) {
-            if (tabName === 'settings' && window.loggedUser?.role !== 'مدير نظام') return showToast("صلاحيات غير كافية", "error");
-            window.activeTab = tabName;
-            ['overview', 'documents', 'dynamic-forms', 'file-filler', 'manage-branches', 'settings'].forEach(t => {
-                document.getElementById(`tab-${t}`)?.classList.add('hidden');
-                const navBtn = document.getElementById(`nav-${t}`);
-                if (navBtn) navBtn.className = "w-full flex items-center space-x-3 space-x-reverse px-4 py-3 rounded-xl transition font-semibold text-sm hover:bg-slate-800 hover:text-white text-slate-400";
-            });
-            document.getElementById(`tab-${tabName}`)?.classList.remove('hidden');
-            document.getElementById(`nav-${tabName}`).className = "w-full flex items-center space-x-3 space-x-reverse px-4 py-3 rounded-xl transition font-semibold text-sm bg-indigo-900 text-white shadow-md";
-            renderCurrentTabData(tabName);
-        }
-
-        window.renderCurrentTabData = function(tabName) {
-            updateLiveStats();
-            if (tabName === 'overview') renderOverviewActivities();
-            else if (tabName === 'documents') renderDocumentsList();
-            else if (tabName === 'dynamic-forms') renderDynamicForms();
-            else if (tabName === 'file-filler') renderFileFillers();
-            else if (tabName === 'manage-branches') renderBranchesAndUsers();
-        }
-
-        window.updateLiveStats = function() {
-            let viewableDocs = window.documents;
-            const isAdmin = window.loggedUser?.role === 'مدير نظام';
-            if (!isAdmin) viewableDocs = window.documents.filter(d => d?.receiverBranchId === window.loggedUser?.branchId || d?.senderId === window.loggedUser?.id);
-            
-            document.getElementById('stat-hero-incoming').textContent = viewableDocs.filter(d => d?.receiverBranchId === window.loggedUser?.branchId || (isAdmin && d?.receiverBranchId === 'main_hq')).length;
-            document.getElementById('stat-hero-outgoing').textContent = viewableDocs.filter(d => d?.senderId === window.loggedUser?.id).length;
-            document.getElementById('stat-total-docs').textContent = viewableDocs.length;
-            document.getElementById('stat-active-forms').textContent = window.dynamicForms.filter(f => !f?.isSubmitted).length;
-            document.getElementById('stat-total-branches').textContent = window.branches.length;
-            document.getElementById('stat-total-users').textContent = window.users.length;
-        }
-
-        // Dropdowns, Date, etc
-        window.populateBranchDropdowns = function() {
-            const selects = ['doc-form-target', 'df-target-branch', 'filler-target-branch', 'user-form-branch'];
-            selects.forEach(id => {
-                const el = document.getElementById(id);
-                if(el) {
-                    el.innerHTML = '';
-                    window.branches.forEach(b => {
-                        const opt = document.createElement('option');
-                        opt.value = b?.id; opt.textContent = b?.name ?? "مجهول";
-                        el.appendChild(opt);
-                    });
-                }
-            });
-        }
-        window.formatDate = (isoStr) => isoStr ? new Date(isoStr).toLocaleDateString('ar-YE', { year: 'numeric', month: 'short', day: 'numeric' }) : "";
-        window.updateClock = () => {
-            const now = new Date();
-            if(document.getElementById('live-time')) document.getElementById('live-time').textContent = now.toLocaleTimeString('ar-YE', { hour: '2-digit', minute: '2-digit', hour12: true });
-        }
-
-        // --- DOCUMENTS FEATURE ---
-        window.filterDocs = (f) => { window.currentDocFilter = f; renderDocumentsList(); }
-        window.renderDocumentsList = function() {
-            const container = document.getElementById('documents-container');
-            container.innerHTML = '';
-            let docs = window.documents;
-            if (window.loggedUser?.role !== 'مدير نظام') docs = docs.filter(d => d?.receiverBranchId === window.loggedUser?.branchId || d?.senderId === window.loggedUser?.id);
-            if (window.currentDocFilter !== 'all') docs = docs.filter(d => d?.tab === window.currentDocFilter);
-            
-            docs.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp)).forEach(doc => {
-                const senderName = window.users.find(u => u?.id === doc?.senderId)?.name ?? "مجهول";
-                const html = `<div class="bg-white rounded-2xl border p-5 shadow-sm space-y-3">
-                    <div class="flex justify-between">
-                        <div><span class="text-[10px] bg-indigo-50 text-indigo-800 px-2 py-1 rounded">${doc?.tab}</span>
-                        <h4 class="font-bold text-sm mt-2">${doc?.title}</h4></div>
-                        <span class="text-xs text-slate-400">${formatDate(doc?.timestamp)}</span>
+        visibleDocs.forEach(docItem => {
+            const senderName = window.users.find(u => u.id === docItem.senderId)?.name ?? 'مجهول';
+            const isUnread = !docItem.isRead;
+            const html = `
+                <div class="bg-white rounded-2xl border ${isUnread ? 'border-indigo-200' : 'border-slate-100'} p-5 shadow-sm space-y-3 hover:shadow-md transition">
+                    <div class="flex justify-between gap-3">
+                        <div class="min-w-0">
+                            <span class="text-[10px] bg-indigo-50 text-indigo-800 px-2 py-1 rounded">${escapeHTML(docItem.tab)}</span>
+                            <h4 class="font-bold text-sm mt-2 truncate">${escapeHTML(docItem.title)}</h4>
+                        </div>
+                        <div class="text-left shrink-0">
+                            <span class="text-xs text-slate-400">${formatDate(docItem.timestamp)}</span>
+                            ${isUnread ? '<div class="text-[10px] text-rose-500 font-bold mt-1">غير مقروء</div>' : ''}
+                        </div>
                     </div>
-                    <p class="text-xs text-slate-500">${doc?.desc}</p>
-                    <div class="flex justify-between items-center pt-2 border-t text-xs">
-                        <span>من: ${senderName}</span>
-                        <div class="flex gap-2">
-                        <button class="bg-indigo-50 text-indigo-700 px-3 py-1 rounded">تحميل</button>
-                        ${window.loggedUser?.role === 'مدير نظام' ? `<button onclick="deleteDocHandler('${doc?.id}')" class="text-rose-500 px-2"><i class="fas fa-trash"></i></button>` : ''}
+                    <p class="text-xs text-slate-500 whitespace-pre-wrap">${escapeHTML(docItem.desc)}</p>
+                    <div class="flex justify-between items-center pt-2 border-t text-xs gap-2">
+                        <span>من: ${escapeHTML(senderName)}</span>
+                        <div class="flex gap-2 items-center">
+                            <button onclick="downloadDocumentFile('${escapeHTML(docItem.fileUrl || '')}','${escapeHTML(docItem.fileName || docItem.title)}')" class="bg-indigo-50 text-indigo-700 px-3 py-1 rounded font-bold">تحميل</button>
+                            <button onclick="markDocumentRead('${docItem.id}')" class="bg-emerald-50 text-emerald-700 px-3 py-1 rounded font-bold">قراءة</button>
+                            ${window.loggedUser?.role === 'مدير نظام' ? `<button onclick="deleteDocHandler('${docItem.id}')" class="text-rose-500 px-2"><i class="fas fa-trash"></i></button>` : ''}
                         </div>
                     </div>
                 </div>`;
-                container.insertAdjacentHTML('beforeend', html);
-            });
+            container.insertAdjacentHTML('beforeend', html);
+        });
+    }
+
+    async function downloadDocumentFile(fileUrl, title) {
+        try {
+            if (fileUrl) {
+                const res = await fetch(fileUrl);
+                const blob = await res.blob();
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = title || 'document';
+                link.click();
+                setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+            } else {
+                const content = `نظام المراسلات\nالمستند: ${title}\n`;
+                const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `${title || 'document'}.txt`;
+                link.click();
+                setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+            }
+            showToast(`تم تنزيل الملف: ${title}`, 'success');
+        } catch (e) {
+            console.error(e);
+            showToast('تعذر تنزيل الملف', 'error');
         }
-        window.deleteDocHandler = (id) => { if(confirm("تأكيد الحذف؟")) deleteFromFirestore('documents', id); }
-        window.handleSendDoc = (e) => {
-            e.preventDefault();
-            const newDoc = {
-                id: "doc_" + Date.now(),
-                tab: document.getElementById('doc-form-tab').value,
-                senderId: window.loggedUser?.id,
-                receiverBranchId: document.getElementById('doc-form-target').value,
-                title: document.getElementById('doc-form-title').value,
-                desc: document.getElementById('doc-form-desc').value,
-                timestamp: new Date().toISOString()
+    }
+
+    async function downloadDocumentsZip() {
+        const branchId = $('download-branch-select')?.value || 'all';
+        const zip = new JSZip();
+        const visibleDocs = branchId === 'all'
+            ? [...window.documents]
+            : window.documents.filter(d => d.receiverBranchId === branchId || d.senderId === window.users.find(u => u.branchId === branchId)?.id);
+
+        if (visibleDocs.length === 0) {
+            showToast('لا توجد ملفات متوفرة للتصدير لهذا الفرع المحدد.', 'error');
+            return;
+        }
+
+        const root = zip.folder('documents');
+        for (const docItem of visibleDocs) {
+            const folderName = `doc_${docItem.id}`;
+            const itemFolder = root.folder(folderName);
+            const meta = {
+                id: docItem.id,
+                title: docItem.title,
+                tab: docItem.tab,
+                desc: docItem.desc,
+                senderId: docItem.senderId,
+                receiverBranchId: docItem.receiverBranchId,
+                timestamp: docItem.timestamp,
+                fileName: docItem.fileName,
+                fileUrl: docItem.fileUrl
             };
-            saveToFirestore('documents', newDoc.id, newDoc);
-            closeSendDocModal();
+            itemFolder.file('metadata.json', JSON.stringify(meta, null, 2));
+            if (docItem.fileUrl) {
+                try {
+                    const blob = await (await fetch(docItem.fileUrl)).blob();
+                    itemFolder.file(docItem.fileName || `${docItem.id}.bin`, blob);
+                } catch {
+                    itemFolder.file('download-error.txt', 'تعذر تنزيل الملف الأصلي من التخزين.');
+                }
+            } else {
+                itemFolder.file('no-file.txt', 'لا يوجد ملف مرفق لهذا العنصر.');
+            }
         }
 
-        // --- BRANCHES AND USERS (Admin) ---
-        window.renderBranchesAndUsers = function() {
-            const bCont = document.getElementById('branches-list-container');
-            const uCont = document.getElementById('users-list-container');
-            bCont.innerHTML = ''; uCont.innerHTML = '';
-            
-            window.branches.forEach(b => {
-                bCont.insertAdjacentHTML('beforeend', `<div class="p-3 bg-slate-50 border rounded-xl flex justify-between">
-                    <div><h5 class="font-bold text-xs">${b?.name}</h5></div>
-                    ${window.loggedUser?.role === 'مدير نظام' && b?.id !== 'main_hq' ? `<button onclick="deleteFromFirestore('branches', '${b?.id}')" class="text-rose-500"><i class="fas fa-trash"></i></button>` : ''}
-                </div>`);
-            });
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `documents_${branchId === 'all' ? 'all' : branchId}.zip`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+        showToast('تم تجهيز ملف ZIP بنجاح', 'success');
+    }
 
-            let viewUsers = window.loggedUser?.role === 'مدير نظام' ? window.users : window.users.filter(u => u?.role === 'مدير نظام');
-            viewUsers.forEach(u => {
-                const bName = window.branches.find(br => br?.id === u?.branchId)?.name ?? "مجهول";
-                uCont.insertAdjacentHTML('beforeend', `<div class="bg-white border rounded-xl p-4">
-                    <h5 class="font-bold text-xs">${u?.name ?? 'مجهول'}</h5>
-                    <p class="text-[10px] text-slate-500">${u?.title ?? ''} - ${bName}</p>
-                    <p class="text-[10px] mt-1">المستخدم: ${u?.username} | واتساب: ${u?.whatsapp ?? 'لا يوجد'}</p>
-                    ${window.loggedUser?.role === 'مدير نظام' && u?.id !== 'u_admin' ? `<button onclick="deleteFromFirestore('users', '${u?.id}')" class="mt-2 text-[10px] text-rose-500">حذف</button>` : ''}
-                </div>`);
-            });
-        }
-        window.handleAddBranchSubmit = () => {
-            const b = { id: "b_"+Date.now(), name: document.getElementById('branch-form-name').value, district: document.getElementById('branch-form-district').value };
-            if(b.name) { saveToFirestore('branches', b.id, b); closeAddBranchModal(); }
-        }
-        window.handleAddUserSubmit = () => {
-            const u = {
-                id: document.getElementById('user-form-id').value || "u_"+Date.now(),
-                name: document.getElementById('user-form-name').value,
-                title: document.getElementById('user-form-title').value,
-                branchId: document.getElementById('user-form-branch').value,
-                role: document.getElementById('user-form-role').value,
-                username: document.getElementById('user-form-username').value,
-                passwordHash: document.getElementById('user-form-password').value,
-                phone: document.getElementById('user-form-phone').value,
-                whatsapp: document.getElementById('user-form-whatsapp').value
-            };
-            saveToFirestore('users', u.id, u);
-            closeAddUserModal();
+    function deleteDocHandler(id) {
+        if (!confirm('تأكيد الحذف؟')) return;
+        const item = window.documents.find(d => d.id === id);
+        if (item?.storagePath) deleteStorageByPath(item.storagePath);
+        deleteFromFirestore('documents', id);
+        showToast('تم حذف المراسلة بنجاح.', 'info');
+    }
+
+    function openSendDocModal() {
+        if ($('doc-form-title')) $('doc-form-title').value = '';
+        if ($('doc-form-desc')) $('doc-form-desc').value = '';
+        if ($('doc-form-file-name')) $('doc-form-file-name').textContent = 'انقر هنا لاختيار ملف (Word, Excel, PDF, صور..)';
+        if ($('doc-form-file')) $('doc-form-file').value = '';
+        $('modal-send-doc')?.classList.remove('hidden');
+    }
+
+    function closeSendDocModal() {
+        $('modal-send-doc')?.classList.add('hidden');
+    }
+
+    async function handleSendDoc(event) {
+        event.preventDefault();
+        const tab = $('doc-form-tab').value;
+        const target = $('doc-form-target').value;
+        const title = $('doc-form-title').value.trim();
+        const desc = $('doc-form-desc').value.trim();
+        const fileInput = $('doc-form-file');
+        const docId = uid('doc');
+
+        if (!title) {
+            showToast('الرجاء إدخال العنوان.', 'error');
+            return;
         }
 
-        // --- Modals Toggle ---
-        window.openSendDocModal = () => document.getElementById('modal-send-doc').classList.remove('hidden');
-        window.closeSendDocModal = () => document.getElementById('modal-send-doc').classList.add('hidden');
-        window.openAddBranchModal = () => document.getElementById('modal-add-branch').classList.remove('hidden');
-        window.closeAddBranchModal = () => document.getElementById('modal-add-branch').classList.add('hidden');
-        window.openAddUserModal = () => { document.getElementById('user-form-id').value=''; document.getElementById('modal-add-user').classList.remove('hidden'); }
-        window.closeAddUserModal = () => document.getElementById('modal-add-user').classList.add('hidden');
+        let fileInfo = { fileName: '', fileUrl: '', storagePath: '', fileSize: 0 };
+        if (fileInput.files && fileInput.files[0]) {
+            fileInfo = await fileToStorage(fileInput.files[0], `uploads/documents/${docId}`);
+        }
 
-        // Initial Seed (Only runs if empty, usually handled by Firebase)
-        const seedData = async () => {
-            if(window.branches.length === 0) {
-                await saveToFirestore('branches', 'main_hq', { id: "main_hq", name: "المركز الرئيسي بمكتب المالية تعز", district: "وسط المدينة" });
-                await saveToFirestore('users', 'u_admin', { id: "u_admin", name: "أ. ماجد السامعي", title: "مدير عام", branchId: "main_hq", role: "مدير نظام", username: "admin", passwordHash: "123456" });
+        const newDoc = {
+            id: docId,
+            tab,
+            senderId: window.loggedUser?.id,
+            receiverBranchId: target,
+            title,
+            desc,
+            fileName: fileInfo.fileName || 'لا يوجد ملف',
+            fileUrl: fileInfo.fileUrl || '',
+            storagePath: fileInfo.storagePath || '',
+            fileSize: fileInfo.fileSize || 0,
+            fileType: (fileInfo.fileName || '').split('.').pop().toLowerCase(),
+            timestamp: new Date().toISOString(),
+            isRead: false
+        };
+
+        await saveToFirestore('documents', newDoc.id, newDoc);
+        closeSendDocModal();
+        showToast('تم رفع المستند وتجهيز المراسلة بنجاح.', 'success');
+    }
+
+    /* =============================
+       Dynamic forms
+       ============================= */
+    function renderDfFieldsBuilder() {
+        const container = $('df-fields-container');
+        if (!container) return;
+        container.innerHTML = '';
+        if (window.currentDfFields.length === 0) {
+            container.innerHTML = `<p class="text-[11px] text-slate-400 text-center py-4">لا توجد حقول مضافة. الرجاء الإضافة للبدء.</p>`;
+            return;
+        }
+        window.currentDfFields.forEach((field, idx) => {
+            const div = document.createElement('div');
+            div.className = 'flex items-center space-x-2 space-x-reverse';
+            div.innerHTML = `
+                <input type="text" value="${escapeHTML(field.name)}" oninput="updateDfFieldName(${idx}, this.value)" required class="flex-grow p-2 text-xs border rounded-xl" placeholder="اسم الحقل ${idx + 1}">
+                <button type="button" onclick="removeDfField(${idx})" class="text-rose-500 px-2"><i class="fas fa-trash"></i></button>
+            `;
+            container.appendChild(div);
+        });
+    }
+
+    function addDfField() {
+        window.currentDfFields.push({ name: '', value: '' });
+        renderDfFieldsBuilder();
+    }
+
+    function removeDfField(index) {
+        window.currentDfFields.splice(index, 1);
+        renderDfFieldsBuilder();
+    }
+
+    function updateDfFieldName(index, val) {
+        if (window.currentDfFields[index]) window.currentDfFields[index].name = val;
+    }
+
+    function openCreateFormModal() {
+        $('df-title').value = '';
+        window.currentDfFields = [];
+        renderDfFieldsBuilder();
+        $('modal-create-form')?.classList.remove('hidden');
+    }
+
+    function closeCreateFormModal() {
+        $('modal-create-form')?.classList.add('hidden');
+    }
+
+    async function handleCreateFormSubmit() {
+        const title = $('df-title').value.trim();
+        const targetBranch = $('df-target-branch').value;
+
+        if (!title) return showToast('الرجاء إدخال اسم النموذج.', 'error');
+        if (window.currentDfFields.length === 0) return showToast('الرجاء إضافة حقل واحد على الأقل للنموذج.', 'error');
+
+        const newForm = {
+            id: uid('df'),
+            title,
+            creatorId: window.loggedUser.id,
+            targetBranchId: targetBranch,
+            fields: window.currentDfFields.map(f => ({ name: f.name, value: '' })),
+            isSubmitted: false,
+            submissionData: null,
+            timestamp: new Date().toISOString()
+        };
+
+        await saveToFirestore('dynamicForms', newForm.id, newForm);
+        closeCreateFormModal();
+        showToast('تم حفظ النموذج المخصص وإرساله للجهة المحددة.', 'success');
+    }
+
+    function openFillFormModal(formId) {
+        window.currentlyFillingFormId = formId;
+        const form = window.dynamicForms.find(f => f.id === formId);
+        if (!form) return;
+
+        $('fill-form-header').textContent = `تعبئة بيانات: ${form.title}`;
+        $('fill-form-instructions').textContent = 'يرجى تعبئة الحقول المطلوبة بالأسفل بدقة تامة.';
+        const container = $('fill-form-inputs-container');
+        container.innerHTML = '';
+
+        form.fields.forEach((field, index) => {
+            const div = document.createElement('div');
+            div.className = 'space-y-1';
+            div.innerHTML = `
+                <label class="block text-xs font-bold text-slate-700">${escapeHTML(field.name)}</label>
+                <input type="text" id="df-input-${index}" value="${escapeHTML(field.value || '')}" required class="w-full p-2.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            `;
+            container.appendChild(div);
+        });
+
+        $('modal-fill-form')?.classList.remove('hidden');
+    }
+
+    function closeFillFormModal() {
+        $('modal-fill-form')?.classList.add('hidden');
+    }
+
+    async function submitFilledForm() {
+        const form = window.dynamicForms.find(f => f.id === window.currentlyFillingFormId);
+        if (!form) return;
+
+        const updatedFields = form.fields.map((field, index) => ({
+            ...field,
+            value: ($(`df-input-${index}`)?.value || '').trim()
+        }));
+
+        const updated = {
+            ...form,
+            fields: updatedFields,
+            isSubmitted: true,
+            submissionData: {
+                submittedBy: window.loggedUser.id,
+                submittedAt: new Date().toISOString()
             }
         };
 
-        // Start App Auth
-        initAuth().then(() => setTimeout(seedData, 2000));
+        await saveToFirestore('dynamicForms', form.id, updated);
+        closeFillFormModal();
+        showToast('تم إرسال البيانات بنجاح.', 'success');
+    }
 
-    </script>
+    async function downloadFormResponseExcel(formId) {
+        const form = window.dynamicForms.find(f => f.id === formId);
+        if (!form) return;
+
+        const data = [
+            ['اسم النموذج', form.title],
+            ['الجهة المرسلة', window.users.find(u => u.id === form.creatorId)?.name || ''],
+            ['تاريخ الإرسال', form.submissionData?.submittedAt || ''],
+            [],
+            ['اسم الحقل', 'القيمة']
+        ];
+        form.fields.forEach(field => data.push([field.name, field.value || '']));
+
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Response');
+        XLSX.writeFile(wb, `${form.title}.xlsx`);
+    }
+
+    function deleteSentForm(id) {
+        if (!confirm('هل أنت متأكد من حذف هذا النموذج؟')) return;
+        deleteFromFirestore('dynamicForms', id);
+        showToast('تم حذف النموذج.', 'info');
+    }
+
+    function renderDynamicForms() {
+        const receivedList = $('received-forms-list');
+        const sentList = $('sent-forms-list');
+        if (!receivedList || !sentList || !window.loggedUser) return;
+
+        receivedList.innerHTML = '';
+        sentList.innerHTML = '';
+        const { received, sent } = getVisibleForms();
+
+        if (received.length === 0) {
+            receivedList.innerHTML = '<div class="p-6 text-center text-slate-400 text-xs">لا توجد نماذج يومية مطلوب تعبئتها حالياً.</div>';
+        } else {
+            received.forEach(f => {
+                const isDone = f.isSubmitted;
+                const statusClass = isDone ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600';
+                const statusText = isDone ? 'تم التعبئة والإرسال' : 'بانتظار التعبئة';
+                const creatorName = window.users.find(u => u.id === f.creatorId)?.name || 'المركز الرئيسي';
+
+                const html = `
+                    <div class="p-4 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col gap-3 shadow-sm hover:shadow-md transition">
+                        <div>
+                            <h5 class="font-extrabold text-slate-800 text-xs leading-normal">${escapeHTML(f.title)}</h5>
+                            <p class="text-[11px] text-slate-500 mt-1">من: ${escapeHTML(creatorName)}</p>
+                        </div>
+                        <div class="flex items-center justify-between gap-2">
+                            <span class="text-[10px] px-2 py-0.5 rounded-full font-bold ${statusClass} shrink-0">${statusText}</span>
+                            <span class="text-[10px] text-slate-400">${formatDate(f.timestamp)}</span>
+                        </div>
+                        <div class="flex space-x-2 space-x-reverse pt-2 border-t border-slate-100/50">
+                            <button onclick="openFillFormModal('${f.id}')" class="flex-grow py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-xl text-[11px] transition">تعبئة</button>
+                            ${isDone ? `<button onclick="downloadFormResponseExcel('${f.id}')" class="flex-grow py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-[11px] transition">تحميل Excel</button>` : ''}
+                        </div>
+                    </div>`;
+                receivedList.insertAdjacentHTML('beforeend', html);
+            });
+        }
+
+        if (sent.length === 0) {
+            sentList.innerHTML = '<div class="p-6 text-center text-slate-400 text-xs">لا توجد نماذج مرسلة حتى الآن.</div>';
+        } else {
+            sent.forEach(f => {
+                const done = f.isSubmitted;
+                const submitDetails = done
+                    ? `<p>تمت التعبئة بواسطة: ${escapeHTML(window.users.find(u => u.id === f.submissionData?.submittedBy)?.name || 'مجهول')}</p><p>في: ${formatDate(f.submissionData?.submittedAt)}</p>`
+                    : `<p>بحالة انتظار الإرسال من الجهة المستهدفة.</p>`;
+                const html = `
+                    <div class="p-4 bg-slate-50/50 rounded-2xl border border-slate-100 shadow-sm">
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="min-w-0">
+                                <h5 class="font-extrabold text-slate-800 text-xs truncate">${escapeHTML(f.title)}</h5>
+                                <p class="text-[11px] text-slate-400 mt-1">إلى: ${escapeHTML(window.branches.find(b => b.id === f.targetBranchId)?.name || '')}</p>
+                            </div>
+                            <span class="text-[10px] px-2 py-0.5 rounded-full font-bold ${done ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'}">${done ? 'تم' : 'معلق'}</span>
+                        </div>
+                        <div class="text-[9px] space-y-0.5 border-t border-slate-100 pt-2 font-bold leading-normal">${submitDetails}</div>
+                        <div class="flex space-x-2 space-x-reverse pt-2 border-t border-slate-100/50">
+                            <button onclick="downloadFormResponseExcel('${f.id}')" class="flex-grow py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-xl text-[11px] transition" ${!done ? 'disabled' : ''}>تحميل كملف Excel</button>
+                            <button onclick="deleteSentForm('${f.id}')" class="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl text-xs transition"><i class="fas fa-trash-alt"></i></button>
+                        </div>
+                    </div>`;
+                sentList.insertAdjacentHTML('beforeend', html);
+            });
+        }
+    }
+
+    /* =============================
+       File fillers (Word/Excel templates)
+       ============================= */
+    function renderFillerFieldsBuilder() {
+        const container = $('filler-fields-list');
+        if (!container) return;
+        container.innerHTML = '';
+
+        if (window.currentFillerFields.length === 0) {
+            container.innerHTML = '<p class="text-[11px] text-slate-400 text-center py-4">لا توجد حقول مضافة. الرجاء الإضافة للبدء.</p>';
+            return;
+        }
+
+        window.currentFillerFields.forEach((field, idx) => {
+            const row = document.createElement('div');
+            row.className = 'flex items-center space-x-2 space-x-reverse';
+            row.innerHTML = `
+                <input type="text" value="${escapeHTML(field.name)}" oninput="updateFillerFieldName(${idx}, this.value)" class="flex-grow p-2 text-xs border rounded-xl" placeholder="اسم الحقل ${idx + 1}">
+                <button type="button" onclick="removeFillerField(${idx})" class="text-rose-500 px-2"><i class="fas fa-trash"></i></button>
+            `;
+            container.appendChild(row);
+        });
+    }
+
+    function addFillerField() {
+        window.currentFillerFields.push({ name: '', value: '' });
+        renderFillerFieldsBuilder();
+    }
+
+    function removeFillerField(index) {
+        window.currentFillerFields.splice(index, 1);
+        renderFillerFieldsBuilder();
+    }
+
+    function updateFillerFieldName(index, val) {
+        if (window.currentFillerFields[index]) window.currentFillerFields[index].name = val;
+    }
+
+    async function sendInteractiveFileTemplate() {
+        const title = $('filler-title').value.trim();
+        const targetBranch = $('filler-target-branch').value;
+        const fileInput = $('filler-file-input');
+
+        if (!title) return showToast('الرجاء إدخال اسم القالب.', 'error');
+        if (!fileInput.files || !fileInput.files[0]) return showToast('الرجاء رفع الملف الأصلي.', 'error');
+        if (window.currentFillerFields.length === 0) return showToast('الرجاء إضافة حقل واحد على الأقل.', 'error');
+
+        const id = uid('ff');
+        const fileInfo = await fileToStorage(fileInput.files[0], `uploads/file-fillers/${id}`);
+
+        const newItem = {
+            id,
+            title,
+            creatorId: window.loggedUser.id,
+            targetBranchId: targetBranch,
+            originalFile: fileInfo.fileName,
+            originalFileUrl: fileInfo.fileUrl,
+            storagePath: fileInfo.storagePath,
+            fields: window.currentFillerFields.map(f => ({ name: f.name, value: '' })),
+            isFilled: false,
+            timestamp: new Date().toISOString()
+        };
+
+        await saveToFirestore('fileFillers', id, newItem);
+        $('filler-title').value = '';
+        $('filler-file-input').value = '';
+        $('filler-file-name').textContent = 'اسحب وأفلت الملف هنا (Word/Excel)';
+        window.currentFillerFields = [];
+        renderFillerFieldsBuilder();
+        showToast('تم حفظ ونشر القالب بنجاح.', 'success');
+    }
+
+    function openFillInteractiveModal(id) {
+        window.currentlyFillingInteractiveId = id;
+        const item = window.fileFillers.find(f => f.id === id);
+        if (!item) return;
+
+        const container = $('interactive-inputs-container');
+        container.innerHTML = '';
+        $('fill-interactive-info').textContent = `هذا النموذج مأخوذ من الملف الأصلي: ${item.originalFile || 'غير محدد'}`;
+
+        item.fields.forEach((field, idx) => {
+            const div = document.createElement('div');
+            div.className = 'space-y-1';
+            div.innerHTML = `
+                <label class="block text-xs font-bold text-slate-700">${escapeHTML(field.name)}</label>
+                <input type="text" id="interactive-input-${idx}" value="${escapeHTML(field.value || '')}" required class="w-full p-2.5 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500">
+            `;
+            container.appendChild(div);
+        });
+
+        $('modal-fill-interactive')?.classList.remove('hidden');
+    }
+
+    function closeFillInteractiveModal() {
+        $('modal-fill-interactive')?.classList.add('hidden');
+    }
+
+    async function submitInteractiveValues() {
+        const item = window.fileFillers.find(f => f.id === window.currentlyFillingInteractiveId);
+        if (!item) return;
+
+        const updatedFields = item.fields.map((field, idx) => ({
+            ...field,
+            value: ($(`interactive-input-${idx}`)?.value || '').trim()
+        }));
+
+        const updated = {
+            ...item,
+            fields: updatedFields,
+            isFilled: true
+        };
+
+        await saveToFirestore('fileFillers', item.id, updated);
+        closeFillInteractiveModal();
+        showToast('تم حقن المستند الأصلي بالقيم الجديدة بنجاح.', 'success');
+    }
+
+    function deleteFillerTemplate(id) {
+        if (!confirm('هل أنت متأكد من رغبتك في حذف هذا القالب؟')) return;
+        const item = window.fileFillers.find(f => f.id === id);
+        if (item?.storagePath) deleteStorageByPath(item.storagePath);
+        deleteFromFirestore('fileFillers', id);
+        showToast('تم الحذف بنجاح.', 'info');
+    }
+
+    function renderFileFillers() {
+        const container = $('filler-templates-grid');
+        if (!container) return;
+        container.innerHTML = '';
+
+        const viewable = getVisibleFillers();
+        if (viewable.length === 0) {
+            container.innerHTML = '<div class="col-span-2 p-10 text-center text-slate-400 text-xs border border-dashed rounded-2xl">لا توجد قوالب حالياً.</div>';
+            return;
+        }
+
+        viewable.forEach(item => {
+            const creatorName = window.users.find(u => u.id === item.creatorId)?.name || 'المركز الرئيسي';
+            const html = `
+                <div class="p-4 bg-slate-50 rounded-2xl border border-slate-100 shadow-sm">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                            <h4 class="font-bold text-slate-800 text-xs truncate">${escapeHTML(item.title)}</h4>
+                            <p class="text-[11px] text-slate-400 mt-1">بواسطة: ${escapeHTML(creatorName)}</p>
+                        </div>
+                        <span class="text-[10px] px-2 py-0.5 rounded-full font-bold ${item.isFilled ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">${item.isFilled ? 'معبأ' : 'قيد العمل'}</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 mt-3 space-y-1">
+                        <div>الملف الأصلي: ${escapeHTML(item.originalFile || 'غير مرفق')}</div>
+                        <div>الجهة المستهدفة: ${escapeHTML(window.branches.find(b => b.id === item.targetBranchId)?.name || '')}</div>
+                    </div>
+                    <div class="flex gap-2 mt-4">
+                        <button onclick="openFillInteractiveModal('${item.id}')" class="flex-1 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl text-xs font-bold">تعبئة</button>
+                        ${item.originalFileUrl ? `<button onclick="downloadDocumentFile('${escapeHTML(item.originalFileUrl)}','${escapeHTML(item.originalFile || item.title)}')" class="flex-1 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-bold">تنزيل الأصل</button>` : ''}
+                        ${window.loggedUser?.role === 'مدير نظام' ? `<button onclick="deleteFillerTemplate('${item.id}')" class="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl text-xs font-bold"><i class="fas fa-trash-alt"></i></button>` : ''}
+                    </div>
+                </div>`;
+            container.insertAdjacentHTML('beforeend', html);
+        });
+    }
+
+    /* =============================
+       Branches and users
+       ============================= */
+    function openAddBranchModal() {
+        $('branch-form-name').value = '';
+        $('branch-form-district').value = '';
+        $('modal-add-branch')?.classList.remove('hidden');
+    }
+
+    function closeAddBranchModal() {
+        $('modal-add-branch')?.classList.add('hidden');
+    }
+
+    async function handleAddBranchSubmit() {
+        const branch = {
+            id: uid('b'),
+            name: $('branch-form-name').value.trim(),
+            district: $('branch-form-district').value.trim()
+        };
+        if (!branch.name) return showToast('الرجاء إدخال اسم الفرع.', 'error');
+        await saveToFirestore('branches', branch.id, branch);
+        closeAddBranchModal();
+        showToast('تم حفظ الفرع.', 'success');
+    }
+
+    function openAddUserModal() {
+        $('user-modal-title').textContent = 'إضافة موظف';
+        $('user-form-id').value = '';
+        $('user-form-name').value = '';
+        $('user-form-title').value = '';
+        $('user-form-username').value = '';
+        $('user-form-password').value = '';
+        $('user-form-phone').value = '';
+        $('user-form-whatsapp').value = '';
+        $('user-form-avatar').value = '';
+        $('user-form-avatar-preview').classList.add('hidden');
+        $('user-form-avatar-icon').classList.remove('hidden');
+        populateBranchDropdowns();
+        $('modal-add-user')?.classList.remove('hidden');
+    }
+
+    function closeAddUserModal() {
+        $('modal-add-user')?.classList.add('hidden');
+    }
+
+    function openEditUserModal(id) {
+        const u = window.users.find(user => user.id === id);
+        if (!u) return;
+        $('user-modal-title').textContent = 'تعديل حساب موظف مسؤول';
+        $('user-form-id').value = u.id;
+        $('user-form-name').value = u.name || '';
+        $('user-form-title').value = u.title || '';
+        $('user-form-branch').value = u.branchId || '';
+        $('user-form-role').value = u.role || 'موظف فرع';
+        $('user-form-username').value = u.username || '';
+        $('user-form-password').value = '';
+        $('user-form-phone').value = u.phone || '';
+        $('user-form-whatsapp').value = u.whatsapp || '';
+        $('user-form-avatar').value = '';
+        if (u.avatar) {
+            $('user-form-avatar-preview').src = u.avatar;
+            $('user-form-avatar-preview').classList.remove('hidden');
+            $('user-form-avatar-icon').classList.add('hidden');
+        } else {
+            $('user-form-avatar-preview').classList.add('hidden');
+            $('user-form-avatar-icon').classList.remove('hidden');
+        }
+        populateBranchDropdowns();
+        $('modal-add-user')?.classList.remove('hidden');
+    }
+
+    async function handleAddUserSubmit() {
+        const id = $('user-form-id').value || uid('u');
+        const existing = window.users.find(u => u.id === id);
+        const name = $('user-form-name').value.trim();
+        const title = $('user-form-title').value.trim();
+        const branchId = $('user-form-branch').value;
+        const role = $('user-form-role').value;
+        const username = $('user-form-username').value.trim();
+        const password = $('user-form-password').value;
+        const phone = $('user-form-phone').value.trim();
+        const whatsapp = $('user-form-whatsapp').value.trim();
+        const avatarFile = $('user-form-avatar')?.files?.[0] || null;
+
+        if (!name || !title || !username) return showToast('الرجاء تعبئة الحقول الأساسية.', 'error');
+
+        let avatar = existing?.avatar || '';
+        if (avatarFile) {
+            const upload = await fileToStorage(avatarFile, `uploads/avatars/${id}`);
+            avatar = upload.fileUrl;
+        }
+
+        const passwordHash = password
+            ? await hashPassword(password)
+            : (existing?.passwordHash || await hashPassword('123456'));
+
+        const user = {
+            id,
+            name,
+            title,
+            branchId,
+            role,
+            username,
+            passwordHash,
+            avatar,
+            phone,
+            whatsapp
+        };
+
+        await saveToFirestore('users', id, user);
+        closeAddUserModal();
+        showToast(existing ? 'تم تعديل بيانات الموظف.' : 'تم حفظ الحساب.', 'success');
+    }
+
+    async function deleteUser(id) {
+        if (!confirm('هل أنت متأكد من حذف هذا الحساب؟')) return;
+        const u = window.users.find(user => user.id === id);
+        if (u?.avatar && u.avatar.includes('firebase')) {
+            const maybePath = u.avatarStoragePath || '';
+            if (maybePath) deleteStorageByPath(maybePath);
+        }
+        await deleteFromFirestore('users', id);
+        showToast('تم حذف الحساب.', 'info');
+    }
+
+    async function deleteBranch(id) {
+        if (!confirm('هل أنت متأكد من حذف هذا الفرع؟ سيتم نقل الموظفين المرتبطين به إلى المركز الرئيسي.')) return;
+        const mainBranch = window.branches.find(b => b.id === 'main_hq') || window.branches[0];
+        const batch = writeBatch(db);
+
+        window.users
+            .filter(u => u.branchId === id)
+            .forEach(u => batch.set(doc(db, 'users', u.id), { ...u, branchId: mainBranch?.id || '' }, { merge: true }));
+
+        batch.delete(doc(db, 'branches', id));
+        await batch.commit();
+        showToast('تم حذف الفرع وتحديث الموظفين.', 'info');
+    }
+
+    function renderBranchesAndUsers() {
+        const branchCont = $('branches-list-container');
+        const userCont = $('users-list-container');
+        if (!branchCont || !userCont || !window.loggedUser) return;
+
+        branchCont.innerHTML = '';
+        userCont.innerHTML = '';
+
+        window.branches.forEach(b => {
+            const isHq = b.id === 'main_hq';
+            const isAdmin = window.loggedUser.role === 'مدير نظام';
+            const branchHtml = `
+                <div class="p-3 bg-slate-50/50 rounded-xl border border-slate-100 flex items-center justify-between shadow-sm gap-2">
+                    <div class="min-w-0">
+                        <h5 class="font-extrabold text-slate-800 text-xs truncate">${escapeHTML(b.name)}</h5>
+                        <p class="text-[10px] text-slate-400 mt-0.5 truncate">${escapeHTML(b.district || '')}</p>
+                    </div>
+                    ${(!isHq && isAdmin) ? `<button onclick="deleteBranch('${b.id}')" class="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition" title="حذف الفرع"><i class="fas fa-trash-alt text-xs"></i></button>` : '<span class="text-[9px] bg-indigo-50 text-indigo-700 font-extrabold px-2 py-0.5 rounded">الرئيسي</span>'}
+                </div>`;
+            branchCont.insertAdjacentHTML('beforeend', branchHtml);
+        });
+
+        const isAdmin = window.loggedUser.role === 'مدير نظام';
+        const viewableUsers = isAdmin ? window.users : window.users.filter(u => u.role === 'مدير نظام');
+
+        viewableUsers.forEach(u => {
+            const userBranch = window.branches.find(b => b.id === u.branchId);
+            const branchName = userBranch ? userBranch.name : 'الفرع';
+            const avatarUrl = u.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150';
+
+            const actionSection = isAdmin
+                ? `<div class="flex gap-2 pt-3 border-t border-slate-100 mt-3">
+                        <button onclick="openEditUserModal('${u.id}')" class="flex-1 py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[11px] font-bold">تعديل</button>
+                        ${u.id !== 'u_admin' ? `<button onclick="deleteUser('${u.id}')" class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-[11px] font-bold"><i class="fas fa-trash-alt"></i></button>` : ''}
+                    </div>`
+                : '';
+
+            const cred = isAdmin
+                ? `<p class="text-[10px] text-slate-500 mt-1">المستخدم: ${escapeHTML(u.username)} | الهاتف: ${escapeHTML(u.phone || 'لا يوجد')}</p>`
+                : '';
+
+            const card = `
+                <div class="bg-white border rounded-xl p-4 shadow-sm">
+                    <div class="flex items-start gap-3">
+                        <img src="${avatarUrl}" class="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0">
+                        <div class="min-w-0 flex-1">
+                            <h5 class="font-bold text-xs truncate">${escapeHTML(u.name || 'مجهول')}</h5>
+                            <p class="text-[10px] text-slate-500 truncate">${escapeHTML(u.title || '')} - ${escapeHTML(branchName)}</p>
+                            ${cred}
+                        </div>
+                    </div>
+                    ${actionSection}
+                </div>`;
+            userCont.insertAdjacentHTML('beforeend', card);
+        });
+    }
+
+    /* =============================
+       Settings and passwords
+       ============================= */
+    function requestSettingsAccess() {
+        $('sys-lock-input').value = '';
+        $('settings-lock-modal')?.classList.remove('hidden');
+    }
+
+    function closeSettingsLockModal() {
+        $('settings-lock-modal')?.classList.add('hidden');
+    }
+
+    async function verifySettingsPassword() {
+        const val = $('sys-lock-input').value;
+        if (await verifyPassword(window.systemSettings.settingsPasswordHash, val)) {
+            closeSettingsLockModal();
+            switchTab('settings');
+        } else {
+            showToast('خطأ: كلمة المرور المدخلة لقفل الإعدادات خاطئة!', 'error');
+        }
+    }
+
+    function openChangePasswordModal() {
+        $('change-pass-current').value = '';
+        $('change-pass-new').value = '';
+        $('change-pass-confirm').value = '';
+        $('modal-change-password')?.classList.remove('hidden');
+    }
+
+    function closeChangePasswordModal() {
+        $('modal-change-password')?.classList.add('hidden');
+    }
+
+    async function submitChangePassword() {
+        const currentPass = $('change-pass-current').value;
+        const newPass = $('change-pass-new').value;
+        const confirmPass = $('change-pass-confirm').value;
+
+        if (!currentPass || !newPass || !confirmPass) return showToast('الرجاء ملء جميع الحقول المطلوبة.', 'error');
+        if (newPass !== confirmPass) return showToast('كلمة المرور الجديدة وتأكيدها غير متطابقين.', 'error');
+        if (!(await verifyPassword(window.loggedUser.passwordHash, currentPass))) return showToast('كلمة المرور الحالية غير صحيحة.', 'error');
+
+        const updatedHash = await hashPassword(newPass);
+        const updatedUser = { ...window.loggedUser, passwordHash: updatedHash };
+        await saveToFirestore('users', window.loggedUser.id, updatedUser);
+        window.loggedUser = updatedUser;
+        closeChangePasswordModal();
+        showToast('تم تحديث كلمة المرور بنجاح.', 'success');
+    }
+
+    async function saveGlobalSettings() {
+        if (window.loggedUser?.role !== 'مدير نظام') {
+            showToast('صلاحيات غير كافية', 'error');
+            return;
+        }
+        const name = $('set-sys-name').value.trim();
+        const icon = $('set-sys-icon').value;
+        const newPass = $('set-sys-password').value;
+
+        if (!name) return showToast('الرجاء إدخال اسم النظام.', 'error');
+
+        const updated = {
+            ...window.systemSettings,
+            sysName: name,
+            sysIcon: icon
+        };
+
+        if (newPass) updated.settingsPasswordHash = await hashPassword(newPass);
+
+        await saveToFirestore('settings', DOC_IDS.settings, updated);
+        window.systemSettings = updated;
+        $('set-sys-password').value = '';
+        applySettingsToUI();
+        showToast('تم حفظ الإعدادات وتطبيق الهوية بنجاح.', 'success');
+    }
+
+    /* =============================
+       Backups
+       ============================= */
+    async function exportBackup() {
+        const backup = {
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            branches: window.branches,
+            users: window.users,
+            documents: window.documents,
+            dynamicForms: window.dynamicForms,
+            fileFillers: window.fileFillers,
+            systemSettings: window.systemSettings
+        };
+
+        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json;charset=utf-8' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `backup_${new Date().toISOString().slice(0, 10)}.json`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+        showToast('تم تصدير النسخة الاحتياطية.', 'success');
+    }
+
+    function triggerImportBackup() {
+        const input = $('backup-file-input');
+        if (!input) return;
+        input.value = '';
+        input.click();
+    }
+
+    async function importBackupFromFile(file) {
+        const text = await file.text();
+        const backup = JSON.parse(text);
+
+        if (!backup || typeof backup !== 'object') throw new Error('Invalid backup file');
+
+        const batch = writeBatch(db);
+
+        const writeCollection = (col, items, hasDocIds = true) => {
+            if (!Array.isArray(items)) return;
+            items.forEach(item => {
+                const id = item.id || uid(col.slice(0, 2));
+                batch.set(doc(db, col, id), item, { merge: true });
+            });
+        };
+
+        writeCollection('branches', backup.branches);
+        writeCollection('users', backup.users);
+        writeCollection('documents', backup.documents);
+        writeCollection('dynamicForms', backup.dynamicForms);
+        writeCollection('fileFillers', backup.fileFillers);
+        if (backup.systemSettings) {
+            batch.set(doc(db, 'settings', DOC_IDS.settings), backup.systemSettings, { merge: true });
+        }
+
+        await batch.commit();
+        showToast('تم استيراد النسخة الاحتياطية بنجاح.', 'success');
+    }
+
+    /* =============================
+       Realtime setup and seeding
+       ============================= */
+    async function checkSeedData() {
+        try {
+            const [branchesSnap, usersSnap, settingsSnap] = await Promise.all([
+                getDocs(collection(db, COL.branches)),
+                getDocs(collection(db, COL.users)),
+                getDocs(collection(db, COL.settings))
+            ]);
+
+            if (branchesSnap.empty) {
+                const mainPass = await hashPassword('123456');
+                const seedBranches = [
+                    { id: 'main_hq', name: 'المركز الرئيسي بمكتب المالية تعز', district: 'وسط المدينة' },
+                    { id: 'alqahera_br', name: 'فرع مديرية القاهرة', district: 'القاهرة' },
+                    { id: 'mudhaffar_br', name: 'فرع مديرية المظفر', district: 'المظفر' },
+                    { id: 'salah_br', name: 'فرع مديرية صالة', district: 'صالة' }
+                ];
+                const seedUsers = [
+                    {
+                        id: 'u_admin',
+                        name: 'أ. ماجد السامعي',
+                        title: 'مدير عام مكتب المالية تعز',
+                        branchId: 'main_hq',
+                        role: 'مدير نظام',
+                        username: 'admin',
+                        passwordHash: mainPass,
+                        avatar: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=150&h=150',
+                        phone: '777000111',
+                        whatsapp: '777000111'
+                    },
+                    {
+                        id: 'u_user1',
+                        name: 'م. منيف القدسي',
+                        title: 'مسؤول الشؤون المالية بمديرية القاهرة',
+                        branchId: 'alqahera_br',
+                        role: 'موظف فرع',
+                        username: 'alqahera',
+                        passwordHash: mainPass,
+                        avatar: '',
+                        phone: '771888999',
+                        whatsapp: '771888999'
+                    }
+                ];
+
+                const batch = writeBatch(db);
+                seedBranches.forEach(item => batch.set(doc(db, 'branches', item.id), item));
+                seedUsers.forEach(item => batch.set(doc(db, 'users', item.id), item));
+                batch.set(doc(db, 'settings', DOC_IDS.settings), window.systemSettings);
+                await batch.commit();
+            } else if (settingsSnap.empty) {
+                await saveToFirestore('settings', DOC_IDS.settings, window.systemSettings);
+            }
+        } catch (e) {
+            console.error('Seed error:', e);
+        }
+    }
+
+    function setupRealtimeListeners() {
+        const syncMap = [
+            { name: 'branches', stateKey: 'branches' },
+            { name: 'users', stateKey: 'users' },
+            { name: 'documents', stateKey: 'documents' },
+            { name: 'dynamicForms', stateKey: 'dynamicForms' },
+            { name: 'fileFillers', stateKey: 'fileFillers' }
+        ];
+
+        syncMap.forEach(col => {
+            onSnapshot(collection(db, col.name), snapshot => {
+                const data = [];
+                snapshot.forEach(d => data.push(validateAndMigrate(d.data(), col.name)));
+                window[col.stateKey] = data;
+                snapshotReady[col.stateKey] = true;
+                if (window.loggedUser) renderCurrentTabData(window.activeTab);
+                updateClock();
+                checkInitComplete();
+            }, err => console.error(`Error fetching ${col.name}:`, err));
+        });
+
+        onSnapshot(doc(db, 'settings', DOC_IDS.settings), snap => {
+            if (snap.exists()) {
+                window.systemSettings = validateAndMigrate(snap.data(), 'settings');
+                snapshotReady.settings = true;
+                applySettingsToUI();
+                checkInitComplete();
+            }
+        }, err => console.error('settings snapshot error:', err));
+    }
+
+    function checkInitComplete() {
+        if (hasInitializedUI) return;
+        const collectionsLoaded = snapshotReady.branches && snapshotReady.users && snapshotReady.documents && snapshotReady.dynamicForms && snapshotReady.fileFillers && snapshotReady.settings;
+        if (!collectionsLoaded) return;
+
+        hasInitializedUI = true;
+        $('loader')?.classList.add('hidden');
+        $('app')?.classList.remove('hidden');
+        updateClock();
+        setInterval(updateClock, 1000);
+
+        if (window.users.length === 0 && window.branches.length === 0) {
+            showToast('لا توجد بيانات أولية بعد. سيتم تجهيز الحسابات الافتراضية.', 'info');
+        }
+    }
+
+    async function initAuth() {
+        try {
+            await signInAnonymously(auth);
+        } catch (e) {
+            console.error('Auth error:', e);
+            showToast('خطأ في الاتصال بالسيرفر', 'error');
+        }
+    }
+
+    onAuthStateChanged(auth, user => {
+        if (user) {
+            setupRealtimeListeners();
+            checkSeedData();
+        }
+    });
+
+    /* =============================
+       Initial display logic
+       ============================= */
+    function renderAfterLogin() {
+        populateBranchDropdowns();
+        applySettingsToUI();
+        ensureDynamicUI();
+        renderCurrentTabData(window.activeTab);
+    }
+
+    /* =============================
+       Attach to window (onclick support)
+       ============================= */
+    Object.assign(window, {
+        showToast,
+        applySettingsToUI,
+        handleLogin,
+        enterDashboard,
+        handleLogout,
+        switchTab,
+        renderCurrentTabData,
+        updateLiveStats,
+        populateBranchDropdowns,
+        formatDate,
+        filterDocs,
+        renderDocumentsList,
+        saveToFirestore,
+        deleteFromFirestore,
+        deleteDocHandler,
+        openSendDocModal,
+        closeSendDocModal,
+        handleSendDoc,
+        downloadDocumentFile,
+        downloadDocumentsZip,
+        markDocumentRead,
+        openCreateFormModal,
+        closeCreateFormModal,
+        addDfField,
+        removeDfField,
+        updateDfFieldName,
+        handleCreateFormSubmit,
+        openFillFormModal,
+        closeFillFormModal,
+        submitFilledForm,
+        downloadFormResponseExcel,
+        deleteSentForm,
+        renderDynamicForms,
+        addFillerField,
+        removeFillerField,
+        updateFillerFieldName,
+        sendInteractiveFileTemplate,
+        openFillInteractiveModal,
+        closeFillInteractiveModal,
+        submitInteractiveValues,
+        deleteFillerTemplate,
+        renderFileFillers,
+        openAddBranchModal,
+        closeAddBranchModal,
+        handleAddBranchSubmit,
+        openAddUserModal,
+        closeAddUserModal,
+        openEditUserModal,
+        handleAddUserSubmit,
+        deleteUser,
+        deleteBranch,
+        requestSettingsAccess,
+        closeSettingsLockModal,
+        verifySettingsPassword,
+        openChangePasswordModal,
+        closeChangePasswordModal,
+        submitChangePassword,
+        saveGlobalSettings,
+        exportBackup,
+        triggerImportBackup
+    });
+
+    /* =============================
+       File input UI updates
+       ============================= */
+    document.addEventListener('change', async (e) => {
+        const t = e.target;
+        if (t.id === 'doc-form-file') {
+            if ($('doc-form-file-name')) $('doc-form-file-name').textContent = t.files?.[0]?.name || 'انقر هنا لاختيار ملف (Word, Excel, PDF, صور..)';
+        }
+        if (t.id === 'filler-file-input') {
+            if ($('filler-file-name')) $('filler-file-name').textContent = t.files?.[0]?.name || 'اسحب وأفلت الملف هنا (Word/Excel)';
+        }
+        if (t.id === 'user-form-avatar') {
+            const file = t.files?.[0];
+            if (file) {
+                const url = URL.createObjectURL(file);
+                $('user-form-avatar-preview').src = url;
+                $('user-form-avatar-preview').classList.remove('hidden');
+                $('user-form-avatar-icon').classList.add('hidden');
+            }
+        }
+        if (t.id === 'backup-file-input' && t.files?.[0]) {
+            try {
+                await importBackupFromFile(t.files[0]);
+            } catch (err) {
+                console.error(err);
+                showToast('تعذر استيراد النسخة الاحتياطية.', 'error');
+            }
+        }
+    });
+
+    /* =============================
+       Boot
+       ============================= */
+    document.addEventListener('DOMContentLoaded', async () => {
+        ensureDynamicUI();
+        updateClock();
+        applySettingsToUI();
+
+        $('loader')?.classList.remove('hidden');
+        $('app')?.classList.add('hidden');
+
+        await initAuth();
+        // render placeholders while loading
+        renderOverviewActivities();
+    });
+</script>
 </body>
 </html>
